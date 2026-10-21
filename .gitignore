@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+*.log
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+service-account*.json
+coverage/
