@@ -1,234 +1,458 @@
-# Chat Backend — PostgreSQL + Firebase Firestore
+# Chat Backend API
 
-A chat backend in **Node.js + TypeScript (strict)** that supports 1:1 chats, message sending with reliable ordering, read receipts, last-seen tracking, and, as bonus features, **group chats** and **message edit/delete**.
+A TypeScript backend for one-to-one and group conversations. It uses
+PostgreSQL for relational entities and Firebase Firestore for chat
+messages and conversation activity metadata.
 
-| Concern | Store | Why |
-|---|---|---|
-| Users, chats, chat membership | **PostgreSQL** | Relational data with integrity constraints (FKs, unique 1:1 pairs, roles) |
-| Messages, read receipts, last seen | **Firebase Firestore** | High write volume, per-chat subcollections, real-time friendly |
+## Technology Overview
 
----
+  Component                Responsibility
+  ------------------------ -------------------------------------------------
+  Node.js and TypeScript   HTTP API and application logic
+  Express                  Request routing
+  PostgreSQL               Users, conversations, memberships, and roles
+  Firebase Firestore       Messages, read receipts, and last-seen pointers
+  Zod                      Request and environment validation
+  Firestore Emulator       Local development and integration testing
 
-## Quick start
+## Requirements
 
-**Prerequisites:** Node.js ≥ 22, PostgreSQL ≥ 13 (or Docker), and the Firebase CLI with Java for the Firestore emulator (`npm i -g firebase-tools`).
+Install or provide the following before running the service:
 
-```bash
-npm install
-cp .env.example .env            # then edit values (see below)
+-   Node.js 22 or later
+-   PostgreSQL 13 or later, or Docker
+-   Firebase CLI
+-   Java, required by the local Firestore Emulator
 
-# 1. PostgreSQL: use your own, or start one with Docker
-docker compose up -d
+Install the Firebase CLI if needed:
 
-# 2. Firestore: run the local emulator (or point at a real Firebase project)
-npm run emulator                # in a separate terminal, listens on 127.0.0.1:8080
-
-# 3. Create tables, optionally add sample users, and start the API
-npm run db:migrate
-npm run db:seed                 # prints 4 user ids you can use right away
-npm run dev                     # http://localhost:3000
+``` bash
+npm install --global firebase-tools
 ```
 
-### Environment variables
+## Run Locally
 
-| Variable | Description |
-|---|---|
-| `PORT` | HTTP port (default `3000`) |
-| `DATABASE_URL` | PostgreSQL connection string |
-| `FIREBASE_PROJECT_ID` | Firebase project id (any `demo-*` id works with the emulator) |
-| `FIRESTORE_EMULATOR_HOST` | e.g. `127.0.0.1:8080` to use the local emulator |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Path to a service-account JSON, used for a real Firebase project |
+1.  Install the project dependencies and prepare the environment file:
 
-For local development with the emulator:
+    ``` bash
+    npm install
+    cp .env.example .env
+    ```
 
-```env
+2.  Edit `.env` with the values for your local environment.
+
+3.  Start PostgreSQL. If you use the included Docker Compose
+    configuration:
+
+    ``` bash
+    docker compose up -d
+    ```
+
+4.  Start the Firestore Emulator in a separate terminal:
+
+    ``` bash
+    npm run emulator
+    ```
+
+    The local emulator is expected to listen on `127.0.0.1:8080`.
+
+5.  Create the database schema and optional sample users:
+
+    ``` bash
+    npm run db:migrate
+    npm run db:seed
+    ```
+
+    The seed command prints four user IDs for trying the API.
+
+6.  Start the development server:
+
+    ``` bash
+    npm run dev
+    ```
+
+The API is available at `http://localhost:3000` by default.
+
+## Configuration
+
+Set these values in `.env`:
+
+  -----------------------------------------------------------------------
+  Variable                            Purpose
+  ----------------------------------- -----------------------------------
+  `PORT`                              HTTP listener port; defaults to
+                                      `3000`
+
+  `DATABASE_URL`                      PostgreSQL connection string
+
+  `FIREBASE_PROJECT_ID`               Firebase project ID; a `demo-`
+                                      project ID can be used with the
+                                      emulator
+
+  `FIRESTORE_EMULATOR_HOST`           Emulator address, for example
+                                      `127.0.0.1:8080`
+
+  `GOOGLE_APPLICATION_CREDENTIALS`    Path to a service-account JSON file
+                                      when connecting to a real Firebase
+                                      project
+  -----------------------------------------------------------------------
+
+Example local settings:
+
+``` env
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/chat_backend
 FIREBASE_PROJECT_ID=demo-chat-backend
 FIRESTORE_EMULATOR_HOST=127.0.0.1:8080
 ```
 
-### Scripts
+Do not commit real credentials or service-account files to version
+control.
 
-| Script | What it does |
-|---|---|
-| `npm run dev` | Start with hot reload (tsx) |
-| `npm run build` / `npm start` | Compile to `dist/` and run the compiled server |
-| `npm run typecheck` | Strict type check of source and tests |
-| `npm run db:migrate` | Apply `db/schema.sql` (idempotent) |
-| `npm run db:seed` | Insert sample users |
-| `npm run emulator` | Start the Firestore emulator |
-| `npm test` | Run integration tests (needs Postgres and a running emulator) |
-| `npm run test:ci` | Start the emulator, run tests, stop the emulator |
+## Available npm Commands
 
-Tests use the database in `TEST_DATABASE_URL` (default `postgres://localhost:5432/chat_backend_test`, which you create with `createdb chat_backend_test`). They **truncate its tables**, so never point it at real data.
+  -----------------------------------------------------------------------
+  Command                             Description
+  ----------------------------------- -----------------------------------
+  `npm run dev`                       Run the server with hot reload
+                                      using `tsx`
 
----
+  `npm run build`                     Compile the application into
+                                      `dist/`
 
-## API
+  `npm start`                         Run the compiled server
 
-All request and response bodies are JSON. IDs for users and chats are UUIDs; message IDs are Firestore document IDs.
+  `npm run typecheck`                 Check application and test types
 
-### Core endpoints (from the task)
+  `npm run db:migrate`                Apply the SQL schema; safe to rerun
 
-#### 1. Create or get a 1:1 chat
+  `npm run db:seed`                   Add sample users
+
+  `npm run emulator`                  Launch the Firestore Emulator
+
+  `npm test`                          Run integration tests against
+                                      PostgreSQL and the emulator
+
+  `npm run test:ci`                   Start the emulator, execute tests,
+                                      and stop the emulator
+  -----------------------------------------------------------------------
+
+Tests use `TEST_DATABASE_URL`. Its default is
+`postgres://localhost:5432/chat_backend_test`; create that database
+before running tests, for example with `createdb chat_backend_test`. The
+test suite truncates tables in this database, so never configure it to
+point at production or other valuable data.
+
+## HTTP API
+
+Requests and responses use JSON. User and chat identifiers are UUIDs;
+message identifiers are Firestore document IDs.
+
+### Core routes
+
+#### Create or retrieve a direct conversation
+
 `POST /chat/create`
-```json
-{ "userAId": "<uuid>", "userBId": "<uuid>" }
-```
-→ `201` if newly created, `200` if it already existed. Calling with the users in either order returns the same chat.
-```json
-{ "chatId": "<uuid>", "created": true, "chat": { "id": "...", "type": "direct", "members": [ ... ] } }
-```
 
-#### 2. Send a message
-`POST /chat/:chatId/message/send`
-```json
-{ "senderId": "<uuid>", "text": "Hello!" }
-```
-→ `201` with the stored message (`createdAt` is the Firestore server timestamp). Only chat members can send. Text is trimmed and must be 1–4000 characters.
+Request:
 
-#### 3. Get messages
-`GET /chat/:chatId/messages?limit=50[&before=<messageId>]`
-
-Returns the latest `limit` messages (1–100, default 50) **in chronological order** (oldest → newest). For older history, pass the returned `nextCursor` as `before`.
-```json
+``` json
 {
-  "messages": [
-    { "id": "H9Ez...", "chatId": "...", "senderId": "...", "text": "Hello!",
-      "createdAt": "2026-10-21T07:42:19.158Z", "editedAt": null, "deletedAt": null,
-      "readBy": { "<userId>": "2026-10-21T07:42:19.244Z" } }
-  ],
-  "nextCursor": null
+  "userAId": "<uuid>",
+  "userBId": "<uuid>"
 }
 ```
 
-#### 4. Mark a message as read
+Returns `201` when a conversation is created and `200` when the pair
+already has one. The order of the two user IDs does not change which
+conversation is returned.
+
+Example response shape:
+
+``` json
+{
+  "chatId": "<uuid>",
+  "created": true,
+  "chat": {
+    "id": "<uuid>",
+    "type": "direct",
+    "members": []
+  }
+}
+```
+
+#### Send a message
+
+`POST /chat/:chatId/message/send`
+
+Request:
+
+``` json
+{
+  "senderId": "<uuid>",
+  "text": "Hello!"
+}
+```
+
+Returns `201` with the saved message. The server assigns `createdAt`
+using a Firestore server timestamp. Only members of the conversation can
+send messages. Text is trimmed and must contain between 1 and 4000
+characters.
+
+#### Read message history
+
+`GET /chat/:chatId/messages?limit=50[&before=<messageId>]`
+
+The `limit` parameter accepts values from 1 to 100 and defaults to 50.
+Results are returned from oldest to newest. Use the `nextCursor` value
+as `before` to request an earlier page.
+
+A message includes fields such as `id`, `chatId`, `senderId`, `text`,
+`createdAt`, `editedAt`, `deletedAt`, and `readBy`.
+
+#### Mark a message as read
+
 `POST /chat/:chatId/message/:messageId/read`
-```json
-{ "userId": "<uuid>" }
-```
-Writes `readBy.<userId>` = server timestamp on the message. The operation is idempotent: the first read time is kept. A sender reading their own message is a no-op.
 
-#### 5. Update last seen message
+Request:
+
+``` json
+{
+  "userId": "<uuid>"
+}
+```
+
+The reader's timestamp is recorded in the message's `readBy` map.
+Repeating the operation does not replace the first read timestamp.
+Marking your own message as read has no effect.
+
+#### Update last-seen position
+
 `POST /chat/:chatId/lastseen`
-```json
-{ "userId": "<uuid>", "messageId": "<messageId>" }
+
+Request:
+
+``` json
+{
+  "userId": "<uuid>",
+  "messageId": "<messageId>"
+}
 ```
-Stores the user's last-seen pointer in `chats/{chatId}/lastSeen/{userId}`. The pointer **only moves forward**: if a client reports an older message after a newer one (for example, from out-of-order network requests), the newer one is kept.
 
-`GET /chat/:chatId/lastseen` returns every member's pointer.
+The stored pointer represents the latest message seen by a user. Updates
+cannot move it backwards if an older request arrives after a newer one.
 
-#### 6. List a user's chats
+`GET /chat/:chatId/lastseen` returns the members' last-seen pointers.
+
+#### List conversations for a user
+
 `GET /user/:userId/chats`
 
-Returns every chat the user belongs to, with members and roles from PostgreSQL, ordered by most recent activity.
+Returns conversations the user belongs to, including member and role
+details from PostgreSQL, ordered by recent activity.
 
-### Bonus endpoints
+### Additional routes
 
-| Method & path | Body | Description |
-|---|---|---|
-| `POST /user/create` | `{ name }` | Create a user (helper for trying the API) |
-| `POST /chat/group/create` | `{ creatorId, name, memberIds[] }` | Create a group; the creator becomes `admin` |
-| `GET /chat/:chatId` | – | Chat details and members |
-| `PATCH /chat/:chatId` | `{ requesterId, name }` | Rename a group (admin only) |
-| `POST /chat/:chatId/members/add` | `{ requesterId, userIds[] }` | Add members (admin only) |
-| `POST /chat/:chatId/members/remove` | `{ requesterId, userId }` | Admin removes a member, or a member leaves |
-| `PATCH /chat/:chatId/message/:messageId` | `{ senderId, text }` | Edit your own message (sets `editedAt`) |
-| `DELETE /chat/:chatId/message/:messageId` | `{ senderId }` | Soft-delete your own message (text cleared, `deletedAt` set) |
-| `GET /health` | – | Liveness check |
+  ------------------------------------------------------------------------------------------------------------------------------
+  Method and path                             Request body                                               Purpose
+  ------------------------------------------- ---------------------------------------------------------- -----------------------
+  `POST /user/create`                         `{ "name": "..." }`                                        Create a user for
+                                                                                                         development or API
+                                                                                                         testing
 
-### Errors
+  `POST /chat/group/create`                   `{ "creatorId": "...", "name": "...", "memberIds": [] }`   Create a group; the
+                                                                                                         creator is an admin
 
-Every error uses the same shape:
-```json
-{ "error": { "code": "BAD_REQUEST", "message": "Validation failed",
-             "details": [{ "field": "userAId", "message": "must be a valid UUID" }] } }
+  `GET /chat/:chatId`                         ---                                                        Retrieve chat details
+                                                                                                         and members
+
+  `PATCH /chat/:chatId`                       `{ "requesterId": "...", "name": "..." }`                  Rename a group; admin
+                                                                                                         access required
+
+  `POST /chat/:chatId/members/add`            `{ "requesterId": "...", "userIds": [] }`                  Add group members;
+                                                                                                         admin access required
+
+  `POST /chat/:chatId/members/remove`         `{ "requesterId": "...", "userId": "..." }`                Remove a member as
+                                                                                                         admin, or leave the
+                                                                                                         group
+
+  `PATCH /chat/:chatId/message/:messageId`    `{ "senderId": "...", "text": "..." }`                     Edit your own message
+
+  `DELETE /chat/:chatId/message/:messageId`   `{ "senderId": "..." }`                                    Soft-delete your own
+                                                                                                         message
+
+  `GET /health`                               ---                                                        Check whether the API
+                                                                                                         is alive
+  ------------------------------------------------------------------------------------------------------------------------------
+
+### Error responses
+
+Errors share a consistent structure:
+
+``` json
+{
+  "error": {
+    "code": "BAD_REQUEST",
+    "message": "Validation failed",
+    "details": [
+      {
+        "field": "userAId",
+        "message": "must be a valid UUID"
+      }
+    ]
+  }
+}
 ```
-| Status | When |
-|---|---|
-| `400` | Invalid input, malformed JSON, a group operation on a 1:1 chat, editing a deleted message |
-| `403` | The user is not a chat member, or lacks admin rights / message ownership |
-| `404` | Unknown user, chat, message or route |
 
-### Example session
+Common status codes:
 
-```bash
+  -----------------------------------------------------------------------
+  Status                              Meaning
+  ----------------------------------- -----------------------------------
+  `400`                               Invalid input, malformed JSON,
+                                      unsupported operation, or invalid
+                                      message state
+
+  `403`                               Caller is not a member, is not an
+                                      admin, or does not own the message
+
+  `404`                               Requested user, chat, message, or
+                                      route was not found
+  -----------------------------------------------------------------------
+
+## Try the API
+
+With the server running, you can create two users, open a direct chat,
+send a message, and mark it as read. The following example uses `curl`
+and `jq`:
+
+``` bash
 API=http://localhost:3000
-A=$(curl -s -XPOST $API/user/create -H 'Content-Type: application/json' -d '{"name":"Alice"}' | jq -r .id)
-B=$(curl -s -XPOST $API/user/create -H 'Content-Type: application/json' -d '{"name":"Bob"}'   | jq -r .id)
 
-CHAT=$(curl -s -XPOST $API/chat/create -H 'Content-Type: application/json' \
+A=$(curl -s -X POST "$API/user/create" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Alice"}' | jq -r .id)
+
+B=$(curl -s -X POST "$API/user/create" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Bob"}' | jq -r .id)
+
+CHAT=$(curl -s -X POST "$API/chat/create" \
+  -H 'Content-Type: application/json' \
   -d "{\"userAId\":\"$A\",\"userBId\":\"$B\"}" | jq -r .chatId)
 
-MSG=$(curl -s -XPOST $API/chat/$CHAT/message/send -H 'Content-Type: application/json' \
+MSG=$(curl -s -X POST "$API/chat/$CHAT/message/send" \
+  -H 'Content-Type: application/json' \
   -d "{\"senderId\":\"$A\",\"text\":\"Hi Bob\"}" | jq -r .id)
 
-curl -s -XPOST $API/chat/$CHAT/message/$MSG/read -H 'Content-Type: application/json' -d "{\"userId\":\"$B\"}"
-curl -s -XPOST $API/chat/$CHAT/lastseen -H 'Content-Type: application/json' -d "{\"userId\":\"$B\",\"messageId\":\"$MSG\"}"
+curl -s -X POST "$API/chat/$CHAT/message/$MSG/read" \
+  -H 'Content-Type: application/json' \
+  -d "{\"userId\":\"$B\"}"
+
 curl -s "$API/chat/$CHAT/messages?limit=50" | jq
-curl -s $API/user/$A/chats | jq
+curl -s "$API/user/$A/chats" | jq
 ```
 
----
+## Architecture Notes
 
-## Design
+### PostgreSQL data
 
-### Data model
+The relational schema is defined in `db/schema.sql`.
 
-**PostgreSQL** ([`db/schema.sql`](db/schema.sql))
+-   `users`: UUID, name, creation timestamp
+-   `chats`: UUID, type (`direct` or `group`), optional name, creator,
+    unique direct-chat key, timestamps
+-   `chat_members`: chat and user references, role (`admin` or
+    `member`), join timestamp, composite primary key
+
+### Firestore documents
+
+Messages and activity metadata are stored in these paths:
+
+``` text
+chats/{chatId}/messages/{messageId}
+chats/{chatId}/lastSeen/{userId}
 ```
-users         (id uuid PK, name, created_at)
-chats         (id uuid PK, type 'direct'|'group', name, created_by → users, direct_key UNIQUE, created_at, updated_at)
-chat_members  (chat_id → chats, user_id → users, role 'admin'|'member', joined_at, PK(chat_id, user_id))
-```
 
-**Firestore**
-```
-chats/{chatId}/messages/{messageId}   { senderId, text, createdAt, editedAt, deletedAt, readBy: { [userId]: Timestamp } }
-chats/{chatId}/lastSeen/{userId}      { messageId, messageCreatedAt, updatedAt }
-```
+Message documents contain sender, text, timestamps for
+creation/edit/deletion, and a `readBy` map. Last-seen documents contain
+the message pointer and timestamps.
 
-### Key decisions
+### Implementation choices
 
-- **One 1:1 chat per pair, even under races.** A direct chat stores `direct_key = "<smallerId>:<largerId>"` with a `UNIQUE` constraint, and creation uses `INSERT … ON CONFLICT DO NOTHING`. Concurrent `POST /chat/create` calls for the same pair therefore return the same `chatId`; a test covers this.
-- **Message ordering.** `createdAt` is the Firestore **server** timestamp, so client clocks can't affect order. Queries sort by `(createdAt, documentId)`, which makes ordering total and deterministic even if two messages share a timestamp. Sending is a single document write, so concurrent senders never contend on a shared counter document.
-- **Cursor pagination.** `before=<messageId>` uses Firestore `startAfter(snapshot)` rather than offsets, so pages stay stable while new messages arrive. One extra document is fetched to compute `nextCursor` exactly, with no phantom empty last page.
-- **Read receipts** are a map on the message document (`readBy.<userId>`), written in a transaction with a field path. One read returns the message together with who has read it, and marking is idempotent.
-- **Last seen** is a separate document per (chat, user), updated in a transaction that refuses to move the pointer backwards.
-- **Authorization.** Every write checks chat membership in PostgreSQL before touching Firestore. Group management needs the `admin` role, and edit/delete requires being the sender. If the last admin leaves a group, the longest-standing member is promoted.
-- **Soft delete.** A deleted message keeps its place in history, with text cleared and `deletedAt` set, so read receipts and last-seen pointers stay valid.
-- **Strict TypeScript.** `strict`, `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes` are on, and all input is validated with **zod** at the HTTP boundary.
-- **Security rules.** `firestore.rules` denies all direct client access, since only this backend (Admin SDK) reads and writes.
+-   **Avoid duplicate direct chats:** The application builds a stable
+    key from the two user IDs and enforces uniqueness in PostgreSQL.
+    `INSERT ... ON CONFLICT DO NOTHING` handles simultaneous create
+    requests.
+-   **Consistent message ordering:** Firestore server timestamps avoid
+    reliance on client clocks. Queries use creation time plus document
+    ID as a deterministic tie-breaker.
+-   **Cursor-based history:** Pagination uses Firestore snapshots rather
+    than offsets and fetches one extra record to determine whether
+    another page exists.
+-   **Idempotent read receipts:** A transaction preserves the first read
+    timestamp for each user.
+-   **Forward-only last-seen pointers:** A transaction prevents a user's
+    pointer from moving to an older message.
+-   **Authorization checks:** Membership is checked in PostgreSQL before
+    Firestore writes. Group administration requires the admin role;
+    editing and deleting messages requires sender ownership.
+-   **Group admin continuity:** If the last administrator leaves, the
+    longest-standing remaining member is promoted.
+-   **Soft deletion:** Deletion clears message text and sets `deletedAt`
+    without removing the document, preserving its place in the
+    conversation history.
+-   **Strict input validation:** TypeScript strict options are enabled,
+    and Zod validates inputs at the HTTP boundary.
+-   **Server-controlled Firestore access:** `firestore.rules` blocks
+    direct client access; the backend accesses Firestore through the
+    Admin SDK.
 
-### Project structure
+## Code Layout
 
-```
+``` text
 src/
-  index.ts                 server bootstrap and graceful shutdown
-  app.ts                   express app factory (dependency-injected, used by tests)
-  config/env.ts            env validation (zod)
-  db/                      pg pool, transactions, migrate and seed scripts
-  firebase/firestore.ts    Admin SDK initialisation (emulator or real project)
+  index.ts                  # Server startup and graceful shutdown
+  app.ts                    # Express app factory, also used by tests
+  config/env.ts             # Environment validation
+  db/                       # PostgreSQL pool, migrations, and seed scripts
+  firebase/firestore.ts     # Firebase Admin SDK setup
   repositories/
-    chatRepository.ts      PostgreSQL: users, chats, members
-    messageRepository.ts   Firestore: messages, read receipts, last seen
-  services/chatService.ts  business rules and authorization
-  routes/                  HTTP routes and request schemas
-  middleware/              validation and error handling
-tests/chat.test.ts         integration tests against real Postgres and the Firestore emulator
+    chatRepository.ts       # Users, chats, and memberships
+    messageRepository.ts    # Messages, receipts, and last-seen data
+  services/chatService.ts   # Application rules and authorization
+  routes/                   # HTTP routes and request schemas
+  middleware/               # Validation and error handling
+tests/chat.test.ts          # Integration tests
 ```
 
-### Testing
+## Run Tests
 
-The integration tests send real HTTP requests through the full stack (Express → service → PostgreSQL + Firestore emulator). They cover every endpoint, including idempotent and concurrent chat creation, message ordering under concurrent sends, pagination, read-receipt idempotency, last-seen monotonicity, group permissions, edit/delete, and validation and error responses.
+Start the emulator in one terminal:
 
-```bash
-npm run emulator   # terminal 1
-npm test           # terminal 2
+``` bash
+npm run emulator
 ```
 
-### Possible next steps
+Then run the test suite in another terminal:
 
-- Authentication (for example, Firebase Auth ID tokens) instead of passing user IDs in request bodies
-- Real-time delivery over WebSockets, or clients subscribing to Firestore directly with security rules
-- Unread counts, typing indicators, attachments and push notifications
+``` bash
+npm test
+```
+
+The integration tests exercise the HTTP stack and its PostgreSQL and
+Firestore dependencies. Coverage includes concurrent direct-chat
+creation, message ordering, pagination, read-receipt idempotency,
+last-seen behavior, group permissions, editing/deleting messages,
+validation, and error responses.
+
+For CI, use:
+
+``` bash
+npm run test:ci
+```
+
+## Potential Improvements
+
+Possible follow-on work includes adding Firebase Authentication token
+verification, real-time message delivery with WebSockets, unread counts,
+typing indicators, attachments, and push notifications.
